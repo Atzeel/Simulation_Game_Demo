@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 public class Spore : MonoBehaviour
@@ -9,26 +8,38 @@ public class Spore : MonoBehaviour
         Seeking,
         Blooming
     }
+    [Header("State Sprites")]
+    public Sprite driftingSprite;
+    public Sprite seekingSprite;
+    public Sprite bloomingSprite;
 
+    private SpriteRenderer spriteRenderer;
     [Header("State")]
-    public SporeState currentState;
-
-    [Header("Food")]
-    public List<Transform> nutrients = new List<Transform>();
+    public SporeState currentState = SporeState.Drifting;
 
     [Header("Energy")]
     public float energy = 50f;
-    public float energyDrain = 1f;
-    public float energyFromFood = 60f;
+    public float maxEnergy = 100f;
+    public float energyDrain = 2f;
+    public float energyFromFood = 35f;
 
     [Header("Movement")]
     public float driftSpeed = 1f;
     public float seekSpeed = 2f;
+    public float directionChangeTime = 2f;
+
+    [Header("Food")]
     public float eatDistance = 0.7f;
 
-    [Header("Blooming")]
+    [Header("Reproduction")]
+    public int nutrientsEaten = 0;
+    public int nutrientsNeededToReproduce = 3;
+
+    public GameObject sporePrefab;
+
+    public int babiesPerBloom = 2;
     public float bloomDuration = 2f;
-    public float bloomEnergyCost = 40f;
+    public float reproductionEnergyCost = 30f;
 
     [Header("Boundary")]
     public float boundaryMargin = 0.5f;
@@ -36,15 +47,24 @@ public class Spore : MonoBehaviour
     private Vector2 driftDirection;
     private float directionTimer;
 
-    private Transform targetNutrient;
+    private GameObject targetNutrient;
 
+    private bool isBlooming = false;
     private float bloomTimer;
-    private bool bloomingStarted = false;
+    private BoxCollider2D playArea;
 
 
     void Start()
     {
         PickRandomDirection();
+        directionTimer = directionChangeTime;
+        spriteRenderer = GetComponent<SpriteRenderer>();
+        GameObject areaObject = GameObject.Find("PlayArea");
+
+        if (areaObject != null)
+        {
+            playArea = areaObject.GetComponent<BoxCollider2D>();
+        }
     }
 
 
@@ -60,7 +80,7 @@ public class Spore : MonoBehaviour
             return;
         }
 
-        CheckState();
+        DecideState();
 
         if (currentState == SporeState.Drifting)
         {
@@ -68,37 +88,44 @@ public class Spore : MonoBehaviour
         }
         else if (currentState == SporeState.Seeking)
         {
-            Seek();
+            SeekFood();
         }
         else if (currentState == SporeState.Blooming)
         {
             Bloom();
         }
 
-        StayOnScreen();
+        UpdateSprite();
+        StayInPlayArea();
     }
 
 
-    
-    // STATE
-    
 
-    void CheckState()
+    // STATE DECISION
+
+
+    void DecideState()
     {
-        if (bloomingStarted)
+        // Once blooming begins, don't interrupt it
+        if (isBlooming)
         {
             currentState = SporeState.Blooming;
             return;
         }
 
-        if (energy < 30f)
-        {
-            currentState = SporeState.Seeking;
-        }
-        else if (energy > 70f)
+        // Ate enough food -> reproduce
+        if (nutrientsEaten >= nutrientsNeededToReproduce)
         {
             currentState = SporeState.Blooming;
         }
+
+        // Hungry -> look for food
+        else if (energy < 50f)
+        {
+            currentState = SporeState.Seeking;
+        }
+
+        // Otherwise wander
         else
         {
             currentState = SporeState.Drifting;
@@ -106,9 +133,9 @@ public class Spore : MonoBehaviour
     }
 
 
-    
+
     // DRIFTING
-   
+
 
     void Drift()
     {
@@ -117,7 +144,7 @@ public class Spore : MonoBehaviour
         if (directionTimer <= 0)
         {
             PickRandomDirection();
-            directionTimer = 2f;
+            directionTimer = directionChangeTime;
         }
 
         transform.position +=
@@ -127,22 +154,23 @@ public class Spore : MonoBehaviour
 
     void PickRandomDirection()
     {
-        driftDirection = Random.insideUnitCircle.normalized;
+        driftDirection =
+            Random.insideUnitCircle.normalized;
     }
 
 
-    // SEEKING
+
+    // SEEKING FOOD
 
 
-    void Seek()
+    void SeekFood()
     {
-        // If current target disappeared, find another one
         if (targetNutrient == null)
         {
             targetNutrient = FindClosestNutrient();
         }
 
-        // No food left
+        // No food exists
         if (targetNutrient == null)
         {
             Drift();
@@ -151,36 +179,38 @@ public class Spore : MonoBehaviour
 
         float distance = Vector2.Distance(
             transform.position,
-            targetNutrient.position
+            targetNutrient.transform.position
         );
 
+        // Close enough -> eat
         if (distance <= eatDistance)
         {
-            Eat();
+            EatNutrient();
             return;
         }
 
         Vector2 direction =
-            (targetNutrient.position - transform.position).normalized;
+            (targetNutrient.transform.position -
+             transform.position).normalized;
 
         transform.position +=
             (Vector3)(direction * seekSpeed * Time.deltaTime);
     }
 
 
-    Transform FindClosestNutrient()
+    GameObject FindClosestNutrient()
     {
-        Transform closest = null;
+        GameObject[] nutrients =
+            GameObject.FindGameObjectsWithTag("Nutrient");
+
+        GameObject closest = null;
         float closestDistance = Mathf.Infinity;
 
-        // Remove nutrients that have already been destroyed
-        nutrients.RemoveAll(item => item == null);
-
-        foreach (Transform nutrient in nutrients)
+        foreach (GameObject nutrient in nutrients)
         {
             float distance = Vector2.Distance(
                 transform.position,
-                nutrient.position
+                nutrient.transform.position
             );
 
             if (distance < closestDistance)
@@ -194,7 +224,7 @@ public class Spore : MonoBehaviour
     }
 
 
-    void Eat()
+    void EatNutrient()
     {
         if (targetNutrient == null)
         {
@@ -205,74 +235,136 @@ public class Spore : MonoBehaviour
 
         energy += energyFromFood;
 
-        // Remove it from the list
-        nutrients.Remove(targetNutrient);
+        energy = Mathf.Clamp(
+            energy,
+            0,
+            maxEnergy
+        );
 
-        // Destroy food
-        Destroy(targetNutrient.gameObject);
+        nutrientsEaten++;
+
+        Destroy(targetNutrient);
 
         targetNutrient = null;
     }
 
 
-   
-    // BLOOMING
-    
+
+    // BLOOMING / REPRODUCTION
+
 
     void Bloom()
     {
-        if (!bloomingStarted)
+        if (!isBlooming)
         {
-            bloomingStarted = true;
+            isBlooming = true;
             bloomTimer = bloomDuration;
+
+            Debug.Log("Spore started blooming!");
         }
 
         bloomTimer -= Time.deltaTime;
 
         if (bloomTimer <= 0)
         {
-            energy -= bloomEnergyCost;
+            Reproduce();
 
-            bloomingStarted = false;
+            nutrientsEaten = 0;
+
+            energy -= reproductionEnergyCost;
+
+            isBlooming = false;
 
             PickRandomDirection();
         }
     }
 
 
-    
-    // BOUNDARY
-    // =========================
-
-    void StayOnScreen()
+    void Reproduce()
     {
-        Camera cam = Camera.main;
+        if (sporePrefab == null)
+        {
+            Debug.LogWarning(
+                "Spore Prefab has not been assigned!"
+            );
 
-        if (cam == null)
+            return;
+        }
+
+        Debug.Log("Spore reproduced!");
+
+        for (int i = 0; i < babiesPerBloom; i++)
+        {
+            Vector2 offset =
+                Random.insideUnitCircle.normalized *
+                Random.Range(0.5f, 1f);
+
+            GameObject baby = Instantiate(
+                sporePrefab,
+                transform.position + (Vector3)offset,
+                Quaternion.identity
+            );
+            
+            baby.transform.localScale = transform.localScale;
+
+            Spore babySpore =
+                baby.GetComponent<Spore>();
+
+            if (babySpore != null)
+            {
+                babySpore.energy = 50f;
+                babySpore.nutrientsEaten = 0;
+            }
+        }
+    }
+
+
+
+    // BOUNDARY
+
+
+    void StayInPlayArea()
+    {
+        if (playArea == null)
         {
             return;
         }
 
-        Vector3 bottomLeft =
-            cam.ViewportToWorldPoint(new Vector3(0, 0, 0));
-
-        Vector3 topRight =
-            cam.ViewportToWorldPoint(new Vector3(1, 1, 0));
+        Bounds bounds = playArea.bounds;
 
         Vector3 pos = transform.position;
 
         pos.x = Mathf.Clamp(
             pos.x,
-            bottomLeft.x + boundaryMargin,
-            topRight.x - boundaryMargin
+            bounds.min.x + boundaryMargin,
+            bounds.max.x - boundaryMargin
         );
 
         pos.y = Mathf.Clamp(
             pos.y,
-            bottomLeft.y + boundaryMargin,
-            topRight.y - boundaryMargin
+            bounds.min.y + boundaryMargin,
+            bounds.max.y - boundaryMargin
         );
 
         transform.position = pos;
+    }
+    
+    void UpdateSprite()
+    {
+        if (spriteRenderer == null)
+            return;
+
+        if (currentState == SporeState.Drifting)
+        {
+            spriteRenderer.sprite = driftingSprite;
+        }
+        else if (currentState == SporeState.Seeking)
+        {
+            spriteRenderer.sprite = seekingSprite;
+        }
+        else if (currentState == SporeState.Blooming)
+        {
+            spriteRenderer.sprite = bloomingSprite;
+        }
     }
 }

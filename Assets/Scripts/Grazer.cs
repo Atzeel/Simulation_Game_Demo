@@ -9,6 +9,12 @@ public class Grazer : MonoBehaviour
         Resting
     }
 
+    [Header("State Sprites")]
+    public Sprite searchingSprite;
+    public Sprite huntingSprite;
+    public Sprite restingSprite;
+
+    private SpriteRenderer spriteRenderer;
     [Header("State")]
     public GrazerState currentState = GrazerState.Searching;
 
@@ -31,6 +37,12 @@ public class Grazer : MonoBehaviour
     [Header("Resting")]
     public float restDuration = 3f;
 
+    [Header("Reproduction")]
+    public int sporesEaten = 0;
+    public int sporesNeededToReproduce = 3;
+    public GameObject grazerPrefab;
+    public int babiesPerBirth = 1;
+
     [Header("Boundary")]
     public float boundaryMargin = 0.5f;
 
@@ -40,12 +52,20 @@ public class Grazer : MonoBehaviour
     private Spore targetSpore;
 
     private float restTimer;
+    private BoxCollider2D playArea;
 
 
     void Start()
     {
         PickRandomDirection();
         directionTimer = directionChangeTime;
+        spriteRenderer = GetComponent<SpriteRenderer>();
+        GameObject areaObject = GameObject.Find("PlayArea");
+
+        if (areaObject != null)
+        {
+            playArea = areaObject.GetComponent<BoxCollider2D>();
+        }
     }
 
 
@@ -54,7 +74,7 @@ public class Grazer : MonoBehaviour
         // Hunger constantly increases
         hunger += hungerRate * Time.deltaTime;
 
-        // Die from starvation
+        // Starvation
         if (hunger >= maxHunger)
         {
             Destroy(gameObject);
@@ -75,14 +95,15 @@ public class Grazer : MonoBehaviour
         {
             Rest();
         }
+        UpdateSprite();
 
-        StayOnScreen();
+        StayInPlayArea();
     }
 
 
-    
-    // STATE CHECK
-    
+
+    // STATE
+
 
     void CheckState()
     {
@@ -92,7 +113,7 @@ public class Grazer : MonoBehaviour
             return;
         }
 
-        // Only hunt when actually hungry
+        // Only hunt if hungry
         if (hunger >= hungryThreshold)
         {
             targetSpore = FindClosestSpore();
@@ -116,9 +137,9 @@ public class Grazer : MonoBehaviour
     }
 
 
-    
+
     // SEARCHING
-    
+
 
     void Search()
     {
@@ -141,9 +162,9 @@ public class Grazer : MonoBehaviour
     }
 
 
-    
+ 
     // HUNTING
-    
+
 
     void Hunt()
     {
@@ -181,10 +202,9 @@ public class Grazer : MonoBehaviour
         Debug.Log("Grazer ate a Spore!");
 
         Destroy(targetSpore.gameObject);
-
         targetSpore = null;
 
-        // Eating makes the Grazer less hungry
+        // Reduce hunger
         hunger -= foodValue;
 
         hunger = Mathf.Clamp(
@@ -193,13 +213,60 @@ public class Grazer : MonoBehaviour
             maxHunger
         );
 
+        // Count food
+        sporesEaten++;
+
+        // Reproduce after eating enough spores
+        if (sporesEaten >= sporesNeededToReproduce)
+        {
+            Reproduce();
+            sporesEaten = 0;
+        }
+
         // Rest after eating
         currentState = GrazerState.Resting;
         restTimer = restDuration;
     }
 
 
-    
+    // REPRODUCTION
+
+
+    void Reproduce()
+    {
+        if (grazerPrefab == null)
+        {
+            Debug.LogWarning("Grazer Prefab is missing!");
+            return;
+        }
+
+        Debug.Log("Grazer reproduced!");
+
+        for (int i = 0; i < babiesPerBirth; i++)
+        {
+            Vector2 offset =
+                Random.insideUnitCircle.normalized *
+                Random.Range(0.5f, 1f);
+
+            GameObject baby = Instantiate(
+                grazerPrefab,
+                transform.position + (Vector3)offset,
+                Quaternion.identity
+            );
+
+            Grazer babyGrazer =
+                baby.GetComponent<Grazer>();
+
+            if (babyGrazer != null)
+            {
+                babyGrazer.hunger = 0f;
+                babyGrazer.sporesEaten = 0;
+            }
+        }
+    }
+
+
+  
     // RESTING
     
 
@@ -217,7 +284,7 @@ public class Grazer : MonoBehaviour
 
     
     // FIND SPORE
-    
+   
 
     Spore FindClosestSpore()
     {
@@ -246,39 +313,51 @@ public class Grazer : MonoBehaviour
     }
 
 
+    // BOUNDARY
    
-    // SCREEN BOUNDARY
-    
 
-    void StayOnScreen()
+    void StayInPlayArea()
     {
-        Camera cam = Camera.main;
-
-        if (cam == null)
+        if (playArea == null)
         {
             return;
         }
 
-        Vector3 bottomLeft =
-            cam.ViewportToWorldPoint(new Vector3(0, 0, 0));
-
-        Vector3 topRight =
-            cam.ViewportToWorldPoint(new Vector3(1, 1, 0));
+        Bounds bounds = playArea.bounds;
 
         Vector3 pos = transform.position;
 
         pos.x = Mathf.Clamp(
             pos.x,
-            bottomLeft.x + boundaryMargin,
-            topRight.x - boundaryMargin
+            bounds.min.x + boundaryMargin,
+            bounds.max.x - boundaryMargin
         );
 
         pos.y = Mathf.Clamp(
             pos.y,
-            bottomLeft.y + boundaryMargin,
-            topRight.y - boundaryMargin
+            bounds.min.y + boundaryMargin,
+            bounds.max.y - boundaryMargin
         );
 
         transform.position = pos;
+    }
+    
+    void UpdateSprite()
+    {
+        if (spriteRenderer == null)
+            return;
+
+        if (currentState == GrazerState.Searching)
+        {
+            spriteRenderer.sprite = searchingSprite;
+        }
+        else if (currentState == GrazerState.Hunting)
+        {
+            spriteRenderer.sprite = huntingSprite;
+        }
+        else if (currentState == GrazerState.Resting)
+        {
+            spriteRenderer.sprite = restingSprite;
+        }
     }
 }
